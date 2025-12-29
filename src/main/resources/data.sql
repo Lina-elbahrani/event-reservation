@@ -4,7 +4,7 @@
 
 -- 1 ADMIN
 INSERT INTO users (nom, prenom, email, password, role, date_inscription, actif, telephone) VALUES
-    ('Admin', 'System', 'admin@event.ma', '$2a$10$AAGqbSCuJX6aUfskgKTpKeCVmG6FuohH9mrtz9.lS6zJ4kIOWPiJu', 'ADMIN', CURRENT_TIMESTAMP, true, '0661234567');
+    ('Admin', 'System', 'admin@event.ma', '$2a$10$H8RqTeE9Rija1nCMJt4WcOdITXLz0Y64P3vBacL5GBPRm0IOLHB76', 'ADMIN', CURRENT_TIMESTAMP, true, '0661234567');
 
 -- 2 ORGANIZERS
 INSERT INTO users (nom, prenom, email, password, role, date_inscription, actif, telephone) VALUES

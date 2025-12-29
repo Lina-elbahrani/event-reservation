@@ -1,4 +1,9 @@
-node_modules
+frontend/generated/
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
 HELP.md
 target/
 .mvn/wrapper/maven-wrapper.jar

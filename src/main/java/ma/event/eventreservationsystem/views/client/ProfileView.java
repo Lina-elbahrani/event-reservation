@@ -9,6 +9,7 @@ import com.vaadin.flow.component.html.H2;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
+import com.vaadin.flow.component.orderedlayout.FlexComponent;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.textfield.EmailField;
 import com.vaadin.flow.component.textfield.PasswordField;
@@ -28,7 +29,7 @@ public class ProfileView extends VerticalLayout {
 
     private final UserService userService;
 
-    // TODO: Récupérer de la session
+    // TODO: Récupérer de la session (Spring Security)
     private final Long currentUserId = 1L;
 
     private User currentUser;
@@ -52,9 +53,14 @@ public class ProfileView extends VerticalLayout {
     public ProfileView(@Autowired UserService userService) {
         this.userService = userService;
 
+        // --- CONFIGURATION DU LAYOUT PRINCIPAL ---
         setSizeFull();
         setPadding(true);
         setSpacing(true);
+
+        // ✅ C'est ici que l'on centre le contenu horizontalement
+        setAlignItems(FlexComponent.Alignment.CENTER);
+        // -----------------------------------------------------
 
         // Charger les données utilisateur
         loadUserData();
@@ -91,6 +97,7 @@ public class ProfileView extends VerticalLayout {
     private VerticalLayout createProfileSection() {
         VerticalLayout section = new VerticalLayout();
         section.setMaxWidth("600px");
+        section.setWidth("100%"); // Assure que la section prend de la place jusqu'à 600px
         section.setPadding(true);
         section.getStyle()
                 .set("background", "white")
@@ -170,6 +177,7 @@ public class ProfileView extends VerticalLayout {
     private VerticalLayout createPasswordSection() {
         VerticalLayout section = new VerticalLayout();
         section.setMaxWidth("600px");
+        section.setWidth("100%");
         section.setPadding(true);
         section.getStyle()
                 .set("background", "white")
@@ -246,6 +254,7 @@ public class ProfileView extends VerticalLayout {
     private VerticalLayout createStatsSection() {
         VerticalLayout section = new VerticalLayout();
         section.setMaxWidth("600px");
+        section.setWidth("100%");
         section.setPadding(true);
         section.getStyle()
                 .set("background", "white")
@@ -278,6 +287,7 @@ public class ProfileView extends VerticalLayout {
     private VerticalLayout createDeactivateSection() {
         VerticalLayout section = new VerticalLayout();
         section.setMaxWidth("600px");
+        section.setWidth("100%");
         section.setPadding(true);
         section.getStyle()
                 .set("background", "#FFF3E0")

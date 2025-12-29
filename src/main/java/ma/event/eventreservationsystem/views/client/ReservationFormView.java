@@ -10,24 +10,29 @@ import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.textfield.IntegerField;
 import com.vaadin.flow.component.textfield.TextArea;
 import com.vaadin.flow.router.*;
+import jakarta.annotation.security.RolesAllowed;
 import ma.event.eventreservationsystem.entity.Event;
 import ma.event.eventreservationsystem.entity.Reservation;
+import ma.event.eventreservationsystem.entity.User;
+import ma.event.eventreservationsystem.security.SecurityService;
 import ma.event.eventreservationsystem.service.EventService;
 import ma.event.eventreservationsystem.service.ReservationService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.format.DateTimeFormatter;
 
 @Route("event/:id/reserve")
 @PageTitle("Réserver | Event Reservation System")
+@RolesAllowed("CLIENT")
+@Transactional
 public class ReservationFormView extends VerticalLayout implements HasUrlParameter<Long> {
 
     private final EventService eventService;
     private final ReservationService reservationService;
+    private final SecurityService securityService;
 
-    // TODO: Récupérer de la session
-    private final Long currentUserId = 1L;
-
+    private User currentUser;
     private Long eventId;
     private Event event;
 
@@ -40,13 +45,26 @@ public class ReservationFormView extends VerticalLayout implements HasUrlParamet
 
     public ReservationFormView(
             @Autowired EventService eventService,
-            @Autowired ReservationService reservationService
+            @Autowired ReservationService reservationService,
+            @Autowired SecurityService securityService
     ) {
         this.eventService = eventService;
         this.reservationService = reservationService;
+        this.securityService = securityService;
 
         setSizeFull();
         setPadding(true);
+
+        // Récupérer l'utilisateur connecté
+        try {
+            this.currentUser = securityService.getAuthenticatedUser();
+            System.out.println("✅ Utilisateur connecté: " + currentUser.getEmail());
+        } catch (Exception e) {
+            System.err.println("❌ Erreur: Utilisateur non connecté");
+            showError("Vous devez être connecté pour faire une réservation");
+            getUI().ifPresent(ui -> ui.navigate("login"));
+            return;
+        }
 
         add(contentLayout);
     }
@@ -77,7 +95,6 @@ public class ReservationFormView extends VerticalLayout implements HasUrlParamet
     }
 
     private boolean isEventReservable() {
-        // L'événement doit être publié
         return event.getStatut() == ma.event.eventreservationsystem.entity.enums.EventStatus.PUBLIE;
     }
 
@@ -146,11 +163,11 @@ public class ReservationFormView extends VerticalLayout implements HasUrlParamet
         nombrePlacesField.setWidthFull();
         nombrePlacesField.setValue(1);
         nombrePlacesField.setMin(1);
-        nombrePlacesField.setMax(10); // RÈGLE : Maximum 10 places
+        nombrePlacesField.setMax(10);
         nombrePlacesField.setStepButtonsVisible(true);
         nombrePlacesField.setHelperText("Maximum 10 places par réservation");
 
-        // Calcul automatique du montant à chaque changement
+        // Calcul automatique du montant
         nombrePlacesField.addValueChangeListener(e -> updateMontantTotal());
 
         // Configuration du champ commentaire
@@ -174,13 +191,12 @@ public class ReservationFormView extends VerticalLayout implements HasUrlParamet
         H2 recapTitle = new H2("Récapitulatif");
         recapTitle.getStyle().set("margin", "0 0 15px 0");
 
-        // Montant total avec style
         montantTotalSpan.getStyle()
                 .set("font-size", "2em")
                 .set("font-weight", "bold")
                 .set("color", "#1976D2");
 
-        updateMontantTotal(); // Calcul initial
+        updateMontantTotal();
 
         HorizontalLayout montantLayout = new HorizontalLayout();
         montantLayout.setDefaultVerticalComponentAlignment(Alignment.CENTER);
@@ -198,7 +214,6 @@ public class ReservationFormView extends VerticalLayout implements HasUrlParamet
             double montant = nombrePlacesField.getValue() * event.getPrixUnitaire();
             montantTotalSpan.setText(String.format("%.2f DH", montant));
 
-            // Vérifier la disponibilité
             int placesDisponibles = eventService.getPlacesDisponibles(eventId);
             if (nombrePlacesField.getValue() > placesDisponibles) {
                 nombrePlacesField.setErrorMessage(
@@ -221,33 +236,28 @@ public class ReservationFormView extends VerticalLayout implements HasUrlParamet
     }
 
     private void confirmerReservation() {
-        // Validations finales
         if (nombrePlacesField.getValue() == null || nombrePlacesField.getValue() < 1) {
             showError("Veuillez sélectionner au moins 1 place");
             return;
         }
 
-        // RÈGLE : Maximum 10 places
         if (nombrePlacesField.getValue() > 10) {
             showError("Maximum 10 places par réservation");
             return;
         }
 
         try {
-            // Création de la réservation
             Reservation reservation = Reservation.builder()
                     .nombrePlaces(nombrePlacesField.getValue())
                     .commentaire(commentaireField.getValue())
                     .build();
 
-            // Appel du service qui vérifie toutes les règles métier
             Reservation savedReservation = reservationService.createReservation(
                     reservation,
-                    currentUserId,
+                    currentUser.getId(),
                     eventId
             );
 
-            // Succès - Afficher le code de réservation
             showReservationSuccess(savedReservation);
 
         } catch (Exception e) {
@@ -256,10 +266,8 @@ public class ReservationFormView extends VerticalLayout implements HasUrlParamet
     }
 
     private void showReservationSuccess(Reservation reservation) {
-        // Clear le formulaire
         contentLayout.removeAll();
 
-        // Message de succès avec le code
         VerticalLayout successLayout = new VerticalLayout();
         successLayout.setAlignItems(Alignment.CENTER);
         successLayout.setPadding(true);

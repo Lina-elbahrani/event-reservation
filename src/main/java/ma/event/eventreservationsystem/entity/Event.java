@@ -5,15 +5,18 @@ import jakarta.validation.constraints.*;
 import lombok.*;
 import ma.event.eventreservationsystem.entity.enums.EventCategory;
 import ma.event.eventreservationsystem.entity.enums.EventStatus;
+import org.hibernate.proxy.HibernateProxy;
+
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-
-
+import java.util.Objects;
 
 @Entity
 @Table(name = "events")
-@Data
+@Getter // Remplace @Data (Safe)
+@Setter // Remplace @Data (Safe)
+@ToString // Remplace @Data (Safe)
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
@@ -74,13 +77,18 @@ public class Event {
 
     private LocalDateTime dateModification;
 
-    // Relations
+    // --- RELATIONS ---
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "organisateur_id", nullable = false)
+    @ToString.Exclude // IMPORTANT : Empêche le crash lors des logs
     private User organisateur;
 
     @OneToMany(mappedBy = "evenement", cascade = CascadeType.ALL, orphanRemoval = true)
+    @ToString.Exclude // IMPORTANT : Empêche le crash et les boucles infinies
     private List<Reservation> reservations = new ArrayList<>();
+
+    // --- LIFECYCLE ---
 
     @PrePersist
     protected void onCreate() {
@@ -95,12 +103,31 @@ public class Event {
         dateModification = LocalDateTime.now();
     }
 
-    // Méthode utilitaire pour calculer les places disponibles
+    // --- MÉTHODES MÉTIER ---
+
     public int getPlacesDisponibles() {
         int placesReservees = reservations.stream()
                 .filter(r -> r.getStatut() == ma.event.eventreservationsystem.entity.enums.ReservationStatus.CONFIRMEE)
                 .mapToInt(Reservation::getNombrePlaces)
                 .sum();
         return capaciteMax - placesReservees;
+    }
+
+    // --- EQUALS & HASHCODE (Optimisés pour JPA) ---
+
+    @Override
+    public final boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null) return false;
+        Class<?> oEffectiveClass = o instanceof HibernateProxy ? ((HibernateProxy) o).getHibernateLazyInitializer().getPersistentClass() : o.getClass();
+        Class<?> thisEffectiveClass = this instanceof HibernateProxy ? ((HibernateProxy) this).getHibernateLazyInitializer().getPersistentClass() : this.getClass();
+        if (thisEffectiveClass != oEffectiveClass) return false;
+        Event event = (Event) o;
+        return getId() != null && Objects.equals(getId(), event.getId());
+    }
+
+    @Override
+    public final int hashCode() {
+        return this instanceof HibernateProxy ? ((HibernateProxy) this).getHibernateLazyInitializer().getPersistentClass().hashCode() : getClass().hashCode();
     }
 }

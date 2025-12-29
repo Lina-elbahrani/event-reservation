@@ -14,43 +14,66 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.format.DateTimeFormatter;
 
-@Route("event/:id")
+@Route("event")  // ← CHANGEMENT ICI : enlevez /:id
 @PageTitle("Détails de l'événement | Event Reservation System")
 public class EventDetailView extends VerticalLayout implements HasUrlParameter<Long> {
 
     private final EventService eventService;
-
     private Long eventId;
     private Event event;
-
     private final VerticalLayout contentLayout = new VerticalLayout();
 
     public EventDetailView(@Autowired EventService eventService) {
         this.eventService = eventService;
-
         setSizeFull();
         setPadding(true);
-
         add(contentLayout);
     }
 
     @Override
     public void setParameter(BeforeEvent beforeEvent, Long eventId) {
+        System.out.println("================================");
+        System.out.println("📝 setParameter appelé");
+        System.out.println("ID reçu: " + eventId);
+        System.out.println("Type: " + (eventId != null ? eventId.getClass().getName() : "NULL"));
+        System.out.println("================================");
+
         this.eventId = eventId;
         loadEventDetails();
     }
 
     private void loadEventDetails() {
+        System.out.println("🔄 Début loadEventDetails() pour ID: " + eventId);
+
         try {
             event = eventService.findById(eventId);
+
+            if (event == null) {
+                System.err.println("❌ L'événement retourné est NULL");
+                showError("L'événement est null");
+                getUI().ifPresent(ui -> ui.navigate("events"));
+                return;
+            }
+
+            System.out.println("✅ Événement chargé avec succès: " + event.getTitre());
             displayEventDetails();
+
         } catch (Exception e) {
+            System.err.println("================================");
+            System.err.println("❌ EXCEPTION ATTRAPÉE");
+            System.err.println("Type: " + e.getClass().getName());
+            System.err.println("Message: " + e.getMessage());
+            System.err.println("================================");
+            e.printStackTrace();
+
             showError("Événement non trouvé");
-            getUI().ifPresent(ui -> ui.navigate("events"));
+            getUI().ifPresent(ui -> ui.navigate(""));
         }
     }
 
     private void displayEventDetails() {
+        System.out.println("🎨 Début displayEventDetails()");
+
         contentLayout.removeAll();
         contentLayout.setMaxWidth("900px");
         contentLayout.setWidthFull();
@@ -113,7 +136,6 @@ public class EventDetailView extends VerticalLayout implements HasUrlParameter<L
 
         // Informations pratiques
         H2 infoTitle = new H2("Informations Pratiques");
-
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy à HH:mm");
 
         VerticalLayout infoLayout = new VerticalLayout();
@@ -142,8 +164,6 @@ public class EventDetailView extends VerticalLayout implements HasUrlParameter<L
         reserveButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_LARGE);
         reserveButton.setWidthFull();
         reserveButton.addClickListener(e -> {
-            // Vérifier si l'utilisateur est connecté
-            // TODO: Implémenter la vérification de session
             getUI().ifPresent(ui -> ui.navigate("login"));
         });
 
@@ -166,6 +186,8 @@ public class EventDetailView extends VerticalLayout implements HasUrlParameter<L
                 orgInfo,
                 reserveButton
         );
+
+        System.out.println("✅ displayEventDetails() terminé avec succès");
     }
 
     private HorizontalLayout createInfoRow(String label, String value) {

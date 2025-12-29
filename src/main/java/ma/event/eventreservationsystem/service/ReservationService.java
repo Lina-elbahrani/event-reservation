@@ -19,6 +19,7 @@ public interface ReservationService {
     List<Reservation> findByUtilisateurAndStatut(Long utilisateurId, ReservationStatus statut);
     List<Reservation> findUpcomingReservationsByUser(Long utilisateurId);
     List<Reservation> findAll();
+    List<Reservation> getAllReservations();
 
     // Statistiques
     Map<String, Object> getStatistiquesReservation();

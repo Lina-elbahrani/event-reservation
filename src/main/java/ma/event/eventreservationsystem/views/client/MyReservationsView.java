@@ -14,10 +14,14 @@ import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
+import com.vaadin.flow.server.auth.AnonymousAllowed;
 import ma.event.eventreservationsystem.entity.Reservation;
+import ma.event.eventreservationsystem.entity.User;
 import ma.event.eventreservationsystem.entity.enums.ReservationStatus;
+import ma.event.eventreservationsystem.security.SecurityService;
 import ma.event.eventreservationsystem.service.ReservationService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -25,23 +29,50 @@ import java.util.Map;
 
 @Route("my-reservations")
 @PageTitle("Mes Réservations | Event Reservation System")
+@AnonymousAllowed  // Permet l'accès sans restriction de rôle
+@Transactional
 public class MyReservationsView extends VerticalLayout {
 
     private final ReservationService reservationService;
-
-    // TODO: Récupérer l'utilisateur connecté
-    private final Long currentUserId = 1L;
+    private final SecurityService securityService;
 
     private final Grid<Reservation> grid = new Grid<>(Reservation.class, false);
     private final ComboBox<ReservationStatus> statusFilter = new ComboBox<>("Filtrer par statut");
     private final TextField searchField = new TextField("Rechercher par code");
 
-    public MyReservationsView(@Autowired ReservationService reservationService) {
+    private User currentUser;
+
+    public MyReservationsView(
+            @Autowired ReservationService reservationService,
+            @Autowired SecurityService securityService) {
+
         this.reservationService = reservationService;
+        this.securityService = securityService;
 
         setSizeFull();
         setPadding(true);
 
+        System.out.println("=== MyReservationsView - Initialisation ===");
+
+        // Récupérer l'utilisateur connecté
+        try {
+            currentUser = securityService.getAuthenticatedUser();
+            System.out.println("✅ Utilisateur connecté: " + currentUser.getEmail() + " (ID: " + currentUser.getId() + ")");
+
+            // Interface normale
+            initializeNormalView();
+
+        } catch (Exception e) {
+            System.err.println("❌ Erreur: Impossible de récupérer l'utilisateur connecté");
+            System.err.println("Détails: " + e.getMessage());
+            e.printStackTrace();
+
+            // Interface de redirection
+            initializeLoginRedirect();
+        }
+    }
+
+    private void initializeNormalView() {
         // Titre
         H1 title = new H1("Mes Réservations");
         title.getStyle().set("color", "#1976D2");
@@ -59,6 +90,39 @@ public class MyReservationsView extends VerticalLayout {
 
         // Charger les données
         updateList();
+    }
+
+    private void initializeLoginRedirect() {
+        VerticalLayout loginPrompt = new VerticalLayout();
+        loginPrompt.setSizeFull();
+        loginPrompt.setAlignItems(Alignment.CENTER);
+        loginPrompt.setJustifyContentMode(JustifyContentMode.CENTER);
+
+        H1 title = new H1("🔒 Accès Restreint");
+        title.getStyle().set("color", "#DC3545");
+
+        Span message = new Span("Vous devez être connecté pour accéder à vos réservations.");
+        message.getStyle()
+                .set("font-size", "1.2em")
+                .set("margin", "20px 0");
+
+        Button loginButton = new Button("Se connecter", e ->
+                getUI().ifPresent(ui -> ui.navigate("login"))
+        );
+        loginButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_LARGE);
+
+        Button homeButton = new Button("Retour à l'accueil", e ->
+                getUI().ifPresent(ui -> ui.navigate(""))
+        );
+        homeButton.addThemeVariants(ButtonVariant.LUMO_LARGE);
+
+        HorizontalLayout buttons = new HorizontalLayout(loginButton, homeButton);
+        buttons.setSpacing(true);
+
+        loginPrompt.add(title, message, buttons);
+        add(loginPrompt);
+
+        showError("Vous devez être connecté pour accéder à cette page");
     }
 
     private void configureFilters() {
@@ -82,15 +146,27 @@ public class MyReservationsView extends VerticalLayout {
                 .setAutoWidth(true);
 
         // Colonne Événement
-        grid.addColumn(res -> res.getEvenement().getTitre())
+        grid.addColumn(res -> {
+                    try {
+                        return res.getEvenement().getTitre();
+                    } catch (Exception e) {
+                        return "N/A";
+                    }
+                })
                 .setHeader("Événement")
                 .setSortable(true)
                 .setAutoWidth(true);
 
         // Colonne Date événement
-        grid.addColumn(res -> res.getEvenement().getDateDebut().format(
-                        DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
-                ))
+        grid.addColumn(res -> {
+                    try {
+                        return res.getEvenement().getDateDebut().format(
+                                DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
+                        );
+                    } catch (Exception e) {
+                        return "N/A";
+                    }
+                })
                 .setHeader("Date événement")
                 .setSortable(true);
 
@@ -144,42 +220,83 @@ public class MyReservationsView extends VerticalLayout {
     }
 
     private void updateList() {
+        if (currentUser == null) {
+            System.err.println("❌ currentUser est null, impossible de charger les réservations");
+            return;
+        }
+
         try {
+            System.out.println("🔄 Chargement des réservations pour l'utilisateur ID: " + currentUser.getId());
+
             List<Reservation> reservations;
 
             // Recherche par code
             if (!searchField.isEmpty()) {
                 try {
                     Reservation res = reservationService.findByCode(searchField.getValue());
-                    reservations = List.of(res);
+                    // Vérifier que la réservation appartient à l'utilisateur
+                    if (res.getUtilisateur().getId().equals(currentUser.getId())) {
+                        reservations = List.of(res);
+                    } else {
+                        reservations = List.of();
+                    }
                 } catch (Exception e) {
+                    System.err.println("⚠️ Réservation non trouvée avec le code: " + searchField.getValue());
                     reservations = List.of();
                 }
             }
             // Filtrage par statut
             else if (statusFilter.getValue() != null) {
+                System.out.println("🔍 Filtrage par statut: " + statusFilter.getValue());
                 reservations = reservationService.findByUtilisateurAndStatut(
-                        currentUserId,
+                        currentUser.getId(),
                         statusFilter.getValue()
                 );
             }
             // Toutes les réservations
             else {
-                reservations = reservationService.findByUtilisateur(currentUserId);
+                System.out.println("📋 Chargement de toutes les réservations");
+                reservations = reservationService.findByUtilisateur(currentUser.getId());
+            }
+
+            System.out.println("📊 Nombre de réservations trouvées: " + reservations.size());
+
+            if (reservations.isEmpty()) {
+                System.out.println("ℹ️ Aucune réservation pour cet utilisateur");
+                showInfo("Vous n'avez aucune réservation pour le moment");
+            } else {
+                for (Reservation res : reservations) {
+                    System.out.println("  - " + res.getCodeReservation() + " | " +
+                            res.getEvenement().getTitre() + " | " +
+                            res.getStatut().getLabel());
+                }
             }
 
             grid.setItems(reservations);
 
         } catch (Exception e) {
-            showError("Erreur lors du chargement des réservations");
+            System.err.println("❌ Erreur lors du chargement: " + e.getMessage());
+            e.printStackTrace();
+            showError("Erreur lors du chargement des réservations: " + e.getMessage());
             grid.setItems();
         }
     }
 
     private void showDetails(Reservation reservation) {
-        // TODO: Afficher une dialog avec les détails complets
-        Map<String, Object> recap = reservationService.getRecapitulatifReservation(reservation.getId());
-        showSuccess("Détails chargés (TODO: afficher dans dialog)");
+        try {
+            Map<String, Object> recap = reservationService.getRecapitulatifReservation(reservation.getId());
+
+            // TODO: Afficher dans une belle dialog
+            String details = "Détails de la réservation " + reservation.getCodeReservation() + "\n\n" +
+                    "Événement: " + recap.get("titre") + "\n" +
+                    "Places: " + recap.get("nombrePlaces") + "\n" +
+                    "Montant: " + recap.get("montantTotal") + " DH";
+
+            showSuccess(details);
+
+        } catch (Exception e) {
+            showError("Erreur lors du chargement des détails");
+        }
     }
 
     private void confirmCancellation(Reservation reservation) {
@@ -203,7 +320,7 @@ public class MyReservationsView extends VerticalLayout {
 
     private void cancelReservation(Reservation reservation) {
         try {
-            reservationService.annulerReservation(reservation.getId(), currentUserId);
+            reservationService.annulerReservation(reservation.getId(), currentUser.getId());
             showSuccess("Réservation annulée avec succès");
             updateList();
         } catch (Exception e) {
@@ -219,5 +336,10 @@ public class MyReservationsView extends VerticalLayout {
     private void showSuccess(String message) {
         Notification notification = Notification.show(message, 3000, Notification.Position.TOP_CENTER);
         notification.addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+    }
+
+    private void showInfo(String message) {
+        Notification notification = Notification.show(message, 3000, Notification.Position.TOP_CENTER);
+        notification.addThemeVariants(NotificationVariant.LUMO_CONTRAST);
     }
 }

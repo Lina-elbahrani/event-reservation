@@ -14,39 +14,45 @@ import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.progressbar.ProgressBar;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
+import jakarta.annotation.security.RolesAllowed;
 import ma.event.eventreservationsystem.entity.Event;
+import ma.event.eventreservationsystem.entity.User;
 import ma.event.eventreservationsystem.entity.enums.EventStatus;
 import ma.event.eventreservationsystem.repository.ReservationRepository;
 import ma.event.eventreservationsystem.service.EventService;
-import org.springframework.beans.factory.annotation.Autowired;
+import ma.event.eventreservationsystem.service.UserService;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Route("organizer/events")
 @PageTitle("Mes Événements | Event Reservation System")
+@RolesAllowed({"ORGANIZER", "ADMIN"})
 public class MyEventsView extends VerticalLayout {
 
     private final EventService eventService;
     private final ReservationRepository reservationRepository;
-
-    // TODO: Récupérer de la session
-    private final Long currentUserId = 1L;
+    private final UserService userService;
 
     private final Grid<Event> grid = new Grid<>(Event.class, false);
     private final ComboBox<EventStatus> statusFilter = new ComboBox<>("Filtrer par statut");
 
-    public MyEventsView(
-            @Autowired EventService eventService,
-            @Autowired ReservationRepository reservationRepository
-    ) {
+    // On ne stocke plus l'ID en dur ici !
+
+    public MyEventsView(EventService eventService,
+                        ReservationRepository reservationRepository,
+                        UserService userService) { // On injecte UserService
         this.eventService = eventService;
         this.reservationRepository = reservationRepository;
+        this.userService = userService;
 
         setSizeFull();
         setPadding(true);
 
-        // Titre et bouton créer
+        // --- Header ---
         HorizontalLayout header = new HorizontalLayout();
         header.setWidthFull();
         header.setJustifyContentMode(JustifyContentMode.BETWEEN);
@@ -59,21 +65,53 @@ public class MyEventsView extends VerticalLayout {
                 getUI().ifPresent(ui -> ui.navigate("organizer/event/new"))
         );
         createButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-
         header.add(title, createButton);
 
-        // Filtre
+        // --- Filtres & Grille ---
         configureFilter();
-
-        // Grille
         configureGrid();
 
-        // Assemblage
         add(header, statusFilter, grid);
 
-        // Charger les données
+        // --- Chargement des données ---
         updateList();
     }
+
+    // --- LE CŒUR DE LA CORRECTION EST ICI ---
+    private void updateList() {
+        // 1. On récupère l'utilisateur connecté dynamiquement
+        User currentUser = getCurrentUser();
+
+        if (currentUser == null) {
+            System.out.println("Erreur : Utilisateur non connecté");
+            return;
+        }
+
+        // 2. On utilise SON ID (donc 3 pour Fatima)
+        try {
+            List<Event> events;
+            if (statusFilter.getValue() != null) {
+                events = eventService.findByOrganisateur(currentUser.getId()).stream()
+                        .filter(e -> e.getStatut() == statusFilter.getValue())
+                        .collect(Collectors.toList());
+            } else {
+                events = eventService.findByOrganisateur(currentUser.getId());
+            }
+            grid.setItems(events);
+        } catch (Exception e) {
+            showError("Erreur : " + e.getMessage());
+        }
+    }
+
+    // Méthode utilitaire pour récupérer Fatima (ID 3)
+    private User getCurrentUser() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.isAuthenticated() && !"anonymousUser".equals(auth.getName())) {
+            return userService.findByEmail(auth.getName());
+        }
+        return null;
+    }
+    // ----------------------------------------
 
     private void configureFilter() {
         statusFilter.setItems(EventStatus.values());
@@ -85,25 +123,10 @@ public class MyEventsView extends VerticalLayout {
     private void configureGrid() {
         grid.setSizeFull();
 
-        // Colonne Titre
-        grid.addColumn(Event::getTitre)
-                .setHeader("Titre")
-                .setSortable(true)
-                .setAutoWidth(true);
+        grid.addColumn(Event::getTitre).setHeader("Titre").setSortable(true).setAutoWidth(true);
+        grid.addColumn(event -> event.getCategorie().getLabel()).setHeader("Catégorie").setSortable(true);
+        grid.addColumn(event -> event.getDateDebut().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))).setHeader("Date").setSortable(true);
 
-        // Colonne Catégorie
-        grid.addColumn(event -> event.getCategorie().getLabel())
-                .setHeader("Catégorie")
-                .setSortable(true);
-
-        // Colonne Date
-        grid.addColumn(event -> event.getDateDebut().format(
-                        DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
-                ))
-                .setHeader("Date")
-                .setSortable(true);
-
-        // Colonne Statut avec badge
         grid.addComponentColumn(event -> {
             Span badge = new Span(event.getStatut().getLabel());
             String color = switch (event.getStatut()) {
@@ -112,132 +135,71 @@ public class MyEventsView extends VerticalLayout {
                 case ANNULE -> "#DC3545";
                 case TERMINE -> "#6C757D";
             };
-            badge.getStyle()
-                    .set("background", color)
-                    .set("color", "white")
-                    .set("padding", "5px 10px")
-                    .set("border-radius", "12px")
-                    .set("font-size", "0.85em");
+            badge.getStyle().set("background", color).set("color", "white").set("padding", "5px 10px").set("border-radius", "12px").set("font-size", "0.85em");
             return badge;
         }).setHeader("Statut");
 
-        // Colonne Taux de remplissage
-        grid.addComponentColumn(event -> createFillRateComponent(event))
-                .setHeader("Taux remplissage")
-                .setAutoWidth(true);
-
-        // Colonne Actions
-        grid.addComponentColumn(event -> createActionsLayout(event))
-                .setHeader("Actions")
-                .setAutoWidth(true);
+        grid.addComponentColumn(this::createFillRateComponent).setHeader("Taux remplissage").setAutoWidth(true);
+        grid.addComponentColumn(this::createActionsLayout).setHeader("Actions").setAutoWidth(true);
     }
 
     private VerticalLayout createFillRateComponent(Event event) {
-        VerticalLayout layout = new VerticalLayout();
-        layout.setPadding(false);
-        layout.setSpacing(false);
-
         Integer placesReservees = reservationRepository.countTotalPlacesReserveesForEvent(event.getId());
+        if (placesReservees == null) placesReservees = 0;
         int capacite = event.getCapaciteMax();
-        double fillRate = (double) placesReservees / capacite;
+        double fillRate = capacite > 0 ? (double) placesReservees / capacite : 0;
 
         ProgressBar progressBar = new ProgressBar();
         progressBar.setValue(fillRate);
         progressBar.setWidth("100px");
-
-        // Couleur selon le taux
         String color = fillRate >= 0.8 ? "#28A745" : fillRate >= 0.5 ? "#FFA500" : "#DC3545";
         progressBar.getStyle().set("--lumo-primary-color", color);
 
         Span text = new Span(placesReservees + " / " + capacite);
         text.getStyle().set("font-size", "0.85em");
-
-        layout.add(progressBar, text);
-
-        return layout;
+        return new VerticalLayout(progressBar, text);
     }
 
     private HorizontalLayout createActionsLayout(Event event) {
         HorizontalLayout actions = new HorizontalLayout();
         actions.setSpacing(true);
+        User currentUser = getCurrentUser(); // Nécessaire pour les actions
 
-        // Bouton Voir
-        Button viewButton = new Button("👁️");
+        Button viewButton = new Button("👁️", e -> getUI().ifPresent(ui -> ui.navigate("event/" + event.getId())));
         viewButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
-        viewButton.addClickListener(e ->
-                getUI().ifPresent(ui -> ui.navigate("event/" + event.getId()))
-        );
 
-        // Bouton Modifier (seulement si pas terminé)
-        if (event.getStatut() != EventStatus.TERMINE) {
-            Button editButton = new Button("✏️");
-            editButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
-            editButton.addClickListener(e ->
-                    getUI().ifPresent(ui -> ui.navigate("organizer/event/edit/" + event.getId()))
-            );
-            actions.add(editButton);
+        actions.add(viewButton);
+
+        // On vérifie que currentUser n'est pas null avant de passer l'ID
+        if (currentUser != null) {
+            if (event.getStatut() != EventStatus.TERMINE) {
+                Button editButton = new Button("✏️", e -> getUI().ifPresent(ui -> ui.navigate("organizer/event/edit/" + event.getId())));
+                editButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
+                actions.add(editButton);
+            }
+            if (event.getStatut() == EventStatus.BROUILLON) {
+                Button publishButton = new Button("✅", e -> publierEvent(event, currentUser.getId()));
+                publishButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_SUCCESS);
+                actions.add(publishButton);
+            }
+            if (event.getStatut() == EventStatus.PUBLIE) {
+                Button cancelButton = new Button("❌", e -> confirmCancelEvent(event, currentUser.getId()));
+                cancelButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_ERROR);
+                actions.add(cancelButton);
+            }
+            long nbReservations = reservationRepository.countByEvenement(event);
+            if (nbReservations == 0) {
+                Button deleteButton = new Button("🗑️", e -> confirmDeleteEvent(event, currentUser.getId()));
+                deleteButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_ERROR);
+                actions.add(deleteButton);
+            }
         }
-
-        // Bouton Publier (seulement si brouillon)
-        if (event.getStatut() == EventStatus.BROUILLON) {
-            Button publishButton = new Button("✅");
-            publishButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_SUCCESS);
-            publishButton.addClickListener(e -> publierEvent(event));
-            actions.add(publishButton);
-        }
-
-        // Bouton Réservations
-        Button reservationsButton = new Button("🎫");
-        reservationsButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
-        reservationsButton.addClickListener(e ->
-                getUI().ifPresent(ui -> ui.navigate("organizer/event/" + event.getId() + "/reservations"))
-        );
-
-        // Bouton Annuler (seulement si publié)
-        if (event.getStatut() == EventStatus.PUBLIE) {
-            Button cancelButton = new Button("❌");
-            cancelButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_ERROR);
-            cancelButton.addClickListener(e -> confirmCancelEvent(event));
-            actions.add(cancelButton);
-        }
-
-        // Bouton Supprimer (seulement si pas de réservations)
-        long nbReservations = reservationRepository.countByEvenement(event);
-        if (nbReservations == 0) {
-            Button deleteButton = new Button("🗑️");
-            deleteButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_ERROR);
-            deleteButton.addClickListener(e -> confirmDeleteEvent(event));
-            actions.add(deleteButton);
-        }
-
-        actions.add(viewButton, reservationsButton);
-
         return actions;
     }
 
-    private void updateList() {
+    private void publierEvent(Event event, Long userId) {
         try {
-            List<Event> events;
-
-            if (statusFilter.getValue() != null) {
-                events = eventService.findByOrganisateur(currentUserId).stream()
-                        .filter(e -> e.getStatut() == statusFilter.getValue())
-                        .toList();
-            } else {
-                events = eventService.findByOrganisateur(currentUserId);
-            }
-
-            grid.setItems(events);
-
-        } catch (Exception e) {
-            showError("Erreur lors du chargement des événements");
-            grid.setItems();
-        }
-    }
-
-    private void publierEvent(Event event) {
-        try {
-            eventService.publierEvent(event.getId(), currentUserId);
+            eventService.publierEvent(event.getId(), userId);
             showSuccess("Événement publié avec succès");
             updateList();
         } catch (Exception e) {
@@ -245,65 +207,41 @@ public class MyEventsView extends VerticalLayout {
         }
     }
 
-    private void confirmCancelEvent(Event event) {
+    private void confirmCancelEvent(Event event, Long userId) {
         ConfirmDialog dialog = new ConfirmDialog();
-        dialog.setHeader("Confirmer l'annulation");
-        dialog.setText(
-                "Êtes-vous sûr de vouloir annuler cet événement ?\n\n" +
-                        event.getTitre() + "\n\n" +
-                        "Les utilisateurs ayant réservé seront notifiés."
-        );
-
-        dialog.setCancelable(true);
-        dialog.setConfirmText("Annuler l'événement");
-        dialog.setConfirmButtonTheme("error primary");
-
+        dialog.setHeader("Annuler ?");
+        dialog.setText("Êtes-vous sûr ?");
+        dialog.setConfirmText("Oui");
         dialog.addConfirmListener(e -> {
             try {
-                eventService.annulerEvent(event.getId(), currentUserId);
-                showSuccess("Événement annulé");
+                eventService.annulerEvent(event.getId(), userId);
+                showSuccess("Annulé");
                 updateList();
-            } catch (Exception ex) {
-                showError(ex.getMessage());
-            }
+            } catch (Exception ex) { showError(ex.getMessage()); }
         });
-
         dialog.open();
     }
 
-    private void confirmDeleteEvent(Event event) {
+    private void confirmDeleteEvent(Event event, Long userId) {
         ConfirmDialog dialog = new ConfirmDialog();
-        dialog.setHeader("Confirmer la suppression");
-        dialog.setText(
-                "Êtes-vous sûr de vouloir supprimer définitivement cet événement ?\n\n" +
-                        event.getTitre() + "\n\n" +
-                        "Cette action est irréversible."
-        );
-
-        dialog.setCancelable(true);
-        dialog.setConfirmText("Supprimer");
-        dialog.setConfirmButtonTheme("error primary");
-
+        dialog.setHeader("Supprimer ?");
+        dialog.setText("Irréversible.");
+        dialog.setConfirmText("Oui");
         dialog.addConfirmListener(e -> {
             try {
-                eventService.deleteEvent(event.getId(), currentUserId);
-                showSuccess("Événement supprimé");
+                eventService.deleteEvent(event.getId(), userId);
+                showSuccess("Supprimé");
                 updateList();
-            } catch (Exception ex) {
-                showError(ex.getMessage());
-            }
+            } catch (Exception ex) { showError(ex.getMessage()); }
         });
-
         dialog.open();
     }
 
     private void showError(String message) {
-        Notification notification = Notification.show(message, 4000, Notification.Position.TOP_CENTER);
-        notification.addThemeVariants(NotificationVariant.LUMO_ERROR);
+        Notification.show(message, 4000, Notification.Position.TOP_CENTER).addThemeVariants(NotificationVariant.LUMO_ERROR);
     }
 
     private void showSuccess(String message) {
-        Notification notification = Notification.show(message, 3000, Notification.Position.TOP_CENTER);
-        notification.addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+        Notification.show(message, 3000, Notification.Position.TOP_CENTER).addThemeVariants(NotificationVariant.LUMO_SUCCESS);
     }
 }

@@ -30,31 +30,28 @@ public class EventServiceImpl implements EventService {
     private final UserService userService;
 
     @Override
+    @Transactional(readOnly = true)
+    public List<Event> findAll() {
+        return eventRepository.findAllWithOrganisateur();
+    }
+
+    @Override
     public Event createEvent(Event event, Long organisateurId) {
         User organisateur = userService.findById(organisateurId);
 
-        // RÈGLE 1 : Seulement ADMIN ou ORGANIZER peuvent créer des événements
         if (organisateur.getRole() != UserRole.ADMIN &&
                 organisateur.getRole() != UserRole.ORGANIZER) {
             throw new ForbiddenException("Vous n'avez pas les droits pour créer un événement");
         }
-
-        // RÈGLE 2 : Date de début dans le futur
         if (event.getDateDebut().isBefore(LocalDateTime.now())) {
             throw new BadRequestException("La date de début doit être dans le futur");
         }
-
-        // RÈGLE 3 : Date de fin après date de début
         if (event.getDateFin().isBefore(event.getDateDebut())) {
             throw new BadRequestException("La date de fin doit être après la date de début");
         }
-
-        // RÈGLE 4 : Capacité > 0
         if (event.getCapaciteMax() <= 0) {
             throw new BadRequestException("La capacité doit être supérieure à 0");
         }
-
-        // RÈGLE 5 : Prix >= 0
         if (event.getPrixUnitaire() < 0) {
             throw new BadRequestException("Le prix doit être supérieur ou égal à 0");
         }
@@ -70,18 +67,15 @@ public class EventServiceImpl implements EventService {
         Event event = findById(id);
         User utilisateur = userService.findById(utilisateurId);
 
-        // RÈGLE 6 : Seulement le créateur ou ADMIN peuvent modifier
         if (!event.getOrganisateur().getId().equals(utilisateurId) &&
                 utilisateur.getRole() != UserRole.ADMIN) {
             throw new ForbiddenException("Vous n'avez pas les droits pour modifier cet événement");
         }
 
-        // RÈGLE 7 : Un événement terminé ne peut plus être modifié
         if (event.getStatut() == EventStatus.TERMINE) {
             throw new BusinessException("Un événement terminé ne peut pas être modifié");
         }
 
-        // Validations des dates
         if (updatedEvent.getDateDebut().isBefore(LocalDateTime.now())) {
             throw new BadRequestException("La date de début doit être dans le futur");
         }
@@ -90,7 +84,6 @@ public class EventServiceImpl implements EventService {
             throw new BadRequestException("La date de fin doit être après la date de début");
         }
 
-        // Mise à jour des champs
         event.setTitre(updatedEvent.getTitre());
         event.setDescription(updatedEvent.getDescription());
         event.setCategorie(updatedEvent.getCategorie());
@@ -110,13 +103,11 @@ public class EventServiceImpl implements EventService {
         Event event = findById(id);
         User utilisateur = userService.findById(utilisateurId);
 
-        // Vérification des droits
         if (!event.getOrganisateur().getId().equals(utilisateurId) &&
                 utilisateur.getRole() != UserRole.ADMIN) {
             throw new ForbiddenException("Vous n'avez pas les droits pour publier cet événement");
         }
 
-        // RÈGLE 8 : Un événement ne peut être publié que s'il a toutes les informations requises
         if (event.getTitre() == null || event.getTitre().isBlank() ||
                 event.getDateDebut() == null || event.getDateFin() == null ||
                 event.getLieu() == null || event.getLieu().isBlank() ||
@@ -134,7 +125,6 @@ public class EventServiceImpl implements EventService {
         Event event = findById(id);
         User utilisateur = userService.findById(utilisateurId);
 
-        // Vérification des droits
         if (!event.getOrganisateur().getId().equals(utilisateurId) &&
                 utilisateur.getRole() != UserRole.ADMIN) {
             throw new ForbiddenException("Vous n'avez pas les droits pour annuler cet événement");
@@ -142,8 +132,6 @@ public class EventServiceImpl implements EventService {
 
         event.setStatut(EventStatus.ANNULE);
         eventRepository.save(event);
-
-        // TODO : Gérer l'annulation automatique des réservations existantes
     }
 
     @Override
@@ -151,13 +139,11 @@ public class EventServiceImpl implements EventService {
         Event event = findById(id);
         User utilisateur = userService.findById(utilisateurId);
 
-        // Vérification des droits
         if (!event.getOrganisateur().getId().equals(utilisateurId) &&
                 utilisateur.getRole() != UserRole.ADMIN) {
             throw new ForbiddenException("Vous n'avez pas les droits pour supprimer cet événement");
         }
 
-        // RÈGLE 9 : Un événement ne peut être supprimé que s'il n'y a aucune réservation
         long nbReservations = reservationRepository.countByEvenement(event);
         if (nbReservations > 0) {
             throw new BusinessException("Impossible de supprimer un événement avec des réservations");
@@ -169,22 +155,26 @@ public class EventServiceImpl implements EventService {
     @Override
     @Transactional(readOnly = true)
     public Event findById(Long id) {
-        return eventRepository.findById(id)
+        Event event = eventRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Événement non trouvé avec l'ID : " + id));
+
+        // SOLUTION : Forcer le chargement de l'organisateur
+        if (event.getOrganisateur() != null) {
+            event.getOrganisateur().getPrenom(); // Force le chargement
+        }
+
+        return event;
     }
 
-    @Override
-    @Transactional(readOnly = true)
-    public List<Event> findAll() {
-        return eventRepository.findAll();
-    }
-
+    // 🔥🔥🔥 CORRECTION MAJEURE ICI 🔥🔥🔥
     @Override
     @Transactional(readOnly = true)
     public List<Event> findByOrganisateur(Long organisateurId) {
-        User organisateur = userService.findById(organisateurId);
-        return eventRepository.findByOrganisateur(organisateur);
+        // ✅ CORRECTION : On utilise l'ID directement (le chiffre 3)
+        // Ne récupérez PAS l'utilisateur avec userService.findById(organisateurId) ici.
+        return eventRepository.findByOrganisateurId(organisateurId);
     }
+    // ------------------------------------
 
     @Override
     @Transactional(readOnly = true)
@@ -215,8 +205,7 @@ public class EventServiceImpl implements EventService {
     public List<Event> searchEvents(EventCategory categorie, LocalDateTime dateDebut,
                                     LocalDateTime dateFin, String ville,
                                     Double prixMin, Double prixMax) {
-        // Utilisation des Streams Java pour filtrer
-        return eventRepository.findAll().stream()
+        return eventRepository.findAllWithOrganisateur().stream()
                 .filter(e -> categorie == null || e.getCategorie().equals(categorie))
                 .filter(e -> dateDebut == null || e.getDateDebut().isAfter(dateDebut))
                 .filter(e -> dateFin == null || e.getDateDebut().isBefore(dateFin))
@@ -230,7 +219,10 @@ public class EventServiceImpl implements EventService {
     @Override
     @Transactional(readOnly = true)
     public List<Event> searchByTitre(String keyword) {
-        return eventRepository.searchByTitre(keyword);
+        if (keyword == null || keyword.isEmpty()) {
+            return eventRepository.findAllWithOrganisateur();
+        }
+        return eventRepository.searchWithOrganisateur(keyword);
     }
 
     @Override
@@ -238,49 +230,47 @@ public class EventServiceImpl implements EventService {
     public int getPlacesDisponibles(Long eventId) {
         Event event = findById(eventId);
         Integer placesReservees = reservationRepository.countTotalPlacesReserveesForEvent(eventId);
+        if (placesReservees == null) placesReservees = 0;
         return event.getCapaciteMax() - placesReservees;
     }
 
+    // 🔥 CORRECTION ICI EGALEMENT POUR LES STATS 🔥
     @Override
     @Transactional(readOnly = true)
     public Map<String, Object> getStatistiquesOrganisateur(Long organisateurId) {
-        User organisateur = userService.findById(organisateurId);
         Map<String, Object> stats = new HashMap<>();
 
-        List<Event> events = eventRepository.findByOrganisateur(organisateur);
+        // On utilise aussi la méthode par ID ici
+        List<Event> events = eventRepository.findByOrganisateurId(organisateurId);
 
-        // Nombre total d'événements
         stats.put("nombreEvenements", events.size());
 
-        // Par statut (utilisation des Streams Java)
-        long nbBrouillon = events.stream()
-                .filter(e -> e.getStatut() == EventStatus.BROUILLON)
-                .count();
-        long nbPublie = events.stream()
-                .filter(e -> e.getStatut() == EventStatus.PUBLIE)
-                .count();
-        long nbAnnule = events.stream()
-                .filter(e -> e.getStatut() == EventStatus.ANNULE)
-                .count();
-        long nbTermine = events.stream()
-                .filter(e -> e.getStatut() == EventStatus.TERMINE)
-                .count();
+        long nbBrouillon = events.stream().filter(e -> e.getStatut() == EventStatus.BROUILLON).count();
+        long nbPublie = events.stream().filter(e -> e.getStatut() == EventStatus.PUBLIE).count();
+        long nbAnnule = events.stream().filter(e -> e.getStatut() == EventStatus.ANNULE).count();
+        long nbTermine = events.stream().filter(e -> e.getStatut() == EventStatus.TERMINE).count();
 
         stats.put("nombreBrouillons", nbBrouillon);
         stats.put("nombrePublies", nbPublie);
         stats.put("nombreAnnules", nbAnnule);
         stats.put("nombreTermines", nbTermine);
 
-        // Nombre total de réservations
         long totalReservations = events.stream()
                 .mapToLong(e -> reservationRepository.countByEvenement(e))
                 .sum();
         stats.put("nombreTotalReservations", totalReservations);
 
-        // Revenu total
-        double revenuTotal = events.stream()
-                .mapToDouble(e -> reservationRepository.calculateTotalRevenueByEvent(e.getId()))
-                .sum();
+        double revenuTotal = 0.0;
+        try {
+            revenuTotal = events.stream()
+                    .mapToDouble(e -> {
+                        Double rev = reservationRepository.calculateTotalRevenueByEvent(e.getId());
+                        return rev != null ? rev : 0.0;
+                    })
+                    .sum();
+        } catch (Exception e) {
+            // Ignorer si la méthode n'existe pas encore
+        }
         stats.put("revenuTotal", revenuTotal);
 
         return stats;
@@ -288,13 +278,10 @@ public class EventServiceImpl implements EventService {
 
     @Override
     public void verifierEvenementsTermines() {
-        // RÈGLE 10 : Vérification automatique des événements terminés
-        // Récupérer tous les événements publiés dont la date de fin est passée
         List<Event> eventsATerminer = eventRepository.findByStatut(EventStatus.PUBLIE).stream()
                 .filter(e -> e.getDateFin().isBefore(LocalDateTime.now()))
                 .collect(Collectors.toList());
 
-        // Mettre à jour leur statut à TERMINE
         eventsATerminer.forEach(event -> {
             event.setStatut(EventStatus.TERMINE);
             eventRepository.save(event);

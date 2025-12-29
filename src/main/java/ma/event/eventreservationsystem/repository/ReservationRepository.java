@@ -4,6 +4,7 @@ import ma.event.eventreservationsystem.entity.Event;
 import ma.event.eventreservationsystem.entity.Reservation;
 import ma.event.eventreservationsystem.entity.User;
 import ma.event.eventreservationsystem.entity.enums.ReservationStatus;
+import org.springframework.data.jpa.repository.EntityGraph; // <--- IMPERATIF
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -14,6 +15,17 @@ import java.util.Optional;
 
 @Repository
 public interface ReservationRepository extends JpaRepository<Reservation, Long> {
+
+    // =================================================================================
+    //  LA CORRECTION EST ICI :
+    //  On force le chargement de 'utilisateur' et 'evenement' pour la liste principale
+    // =================================================================================
+    @Override
+    @EntityGraph(attributePaths = {"utilisateur", "evenement"})
+    List<Reservation> findAll();
+
+
+    // --- Le reste de votre code original ---
 
     // Trouver les réservations d'un utilisateur
     List<Reservation> findByUtilisateur(User utilisateur);

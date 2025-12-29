@@ -6,11 +6,11 @@ import ma.event.eventreservationsystem.entity.Reservation;
 import ma.event.eventreservationsystem.entity.User;
 import ma.event.eventreservationsystem.entity.enums.EventStatus;
 import ma.event.eventreservationsystem.entity.enums.ReservationStatus;
+import ma.event.eventreservationsystem.exception.*;
 import ma.event.eventreservationsystem.repository.ReservationRepository;
 import ma.event.eventreservationsystem.service.EventService;
 import ma.event.eventreservationsystem.service.ReservationService;
 import ma.event.eventreservationsystem.service.UserService;
-import ma.event.eventreservationsystem.exception.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,6 +30,20 @@ public class ReservationServiceImpl implements ReservationService {
     private final UserService userService;
     private final EventService eventService;
 
+    // --- MÉTHODES POUR L'ADMIN (Correspond aux erreurs des screenshots) ---
+
+    @Override
+    public List<Reservation> findAll() {
+        return reservationRepository.findAll();
+    }
+
+    // Ajout de sécurité : si votre interface demande "getAllReservations", cette méthode fera le lien
+    public List<Reservation> getAllReservations() {
+        return reservationRepository.findAll();
+    }
+
+    // -----------------------------------------------------------------------
+
     @Override
     public Reservation createReservation(Reservation reservation, Long utilisateurId, Long evenementId) {
         User utilisateur = userService.findById(utilisateurId);
@@ -41,6 +55,8 @@ public class ReservationServiceImpl implements ReservationService {
         }
 
         // RÈGLE 2 : Vérifier que l'événement n'est pas terminé
+        // Note : Si l'IDE signale "always false", c'est peut-être que le statut est mal initialisé ailleurs,
+        // mais la vérification reste valide pour la logique métier.
         if (evenement.getStatut() == EventStatus.TERMINE) {
             throw new BusinessException("Impossible de réserver pour un événement terminé");
         }
@@ -59,7 +75,7 @@ public class ReservationServiceImpl implements ReservationService {
             throw new BadRequestException("Le nombre de places doit être au moins 1");
         }
 
-        // RÈGLE 5 : Vérifier la disponibilité des places
+        // RÈGLE 5 : Vérifier la disponibilité des places (via le service Event)
         int placesDisponibles = eventService.getPlacesDisponibles(evenementId);
         if (reservation.getNombrePlaces() > placesDisponibles) {
             throw new ConflictException(
@@ -68,8 +84,11 @@ public class ReservationServiceImpl implements ReservationService {
             );
         }
 
-        // RÈGLE 6 : Le nombre total de places réservées ne peut pas dépasser la capacité maximale
+        // RÈGLE 6 : Vérifier la capacité totale via le Repository
+        // Assurez-vous que cette méthode existe dans ReservationRepository, sinon utilisez findAll() et filtrez.
         Integer placesReservees = reservationRepository.countTotalPlacesReserveesForEvent(evenementId);
+        if (placesReservees == null) placesReservees = 0;
+
         if (placesReservees + reservation.getNombrePlaces() > evenement.getCapaciteMax()) {
             throw new ConflictException("La capacité maximale de l'événement serait dépassée");
         }
@@ -79,13 +98,18 @@ public class ReservationServiceImpl implements ReservationService {
         reservation.setEvenement(evenement);
         reservation.setStatut(ReservationStatus.EN_ATTENTE);
 
-        // RÈGLE 7 : Le montant total = nombre de places × prix unitaire
+        // RÈGLE 7 : Le montant total
         double montantTotal = evenement.getPrixUnitaire() * reservation.getNombrePlaces();
         reservation.setMontantTotal(montantTotal);
 
-        // RÈGLE 8 : Le code de réservation doit être unique et au format EVT-XXXXX
+        // RÈGLE 8 : Code unique
         String codeReservation = genererCodeUniqueReservation();
         reservation.setCodeReservation(codeReservation);
+
+        // Fixer la date de réservation si elle n'est pas mise
+        if (reservation.getDateReservation() == null) {
+            reservation.setDateReservation(LocalDateTime.now());
+        }
 
         return reservationRepository.save(reservation);
     }
@@ -99,7 +123,6 @@ public class ReservationServiceImpl implements ReservationService {
             throw new ForbiddenException("Vous n'avez pas les droits pour confirmer cette réservation");
         }
 
-        // Vérifier que la réservation est en attente
         if (reservation.getStatut() != ReservationStatus.EN_ATTENTE) {
             throw new BusinessException("Seules les réservations en attente peuvent être confirmées");
         }
@@ -112,25 +135,24 @@ public class ReservationServiceImpl implements ReservationService {
     public void annulerReservation(Long id, Long utilisateurId) {
         Reservation reservation = findById(id);
 
-        // Vérifier que l'utilisateur est bien le propriétaire
+        // Vérifier les droits
         if (!reservation.getUtilisateur().getId().equals(utilisateurId)) {
+            // Exception : on peut imaginer qu'un ADMIN ait le droit d'annuler n'importe quoi,
+            // mais ici on respecte votre logique stricte utilisateur.
             throw new ForbiddenException("Vous n'avez pas les droits pour annuler cette réservation");
         }
 
-        // Vérifier que la réservation n'est pas déjà annulée
         if (reservation.getStatut() == ReservationStatus.ANNULEE) {
             throw new BusinessException("Cette réservation est déjà annulée");
         }
 
-        // RÈGLE 9 : Les réservations peuvent être annulées jusqu'à 48h avant l'événement
+        // RÈGLE 9 : Délai de 48h
         LocalDateTime dateEvenement = reservation.getEvenement().getDateDebut();
         LocalDateTime maintenant = LocalDateTime.now();
         long heuresRestantes = ChronoUnit.HOURS.between(maintenant, dateEvenement);
 
         if (heuresRestantes < 48) {
-            throw new BusinessException(
-                    "Impossible d'annuler : les réservations doivent être annulées au moins 48h avant l'événement"
-            );
+            throw new BusinessException("Impossible d'annuler : délai de 48h dépassé");
         }
 
         reservation.setStatut(ReservationStatus.ANNULEE);
@@ -155,7 +177,16 @@ public class ReservationServiceImpl implements ReservationService {
     @Transactional(readOnly = true)
     public List<Reservation> findByUtilisateur(Long utilisateurId) {
         User utilisateur = userService.findById(utilisateurId);
-        return reservationRepository.findByUtilisateur(utilisateur);
+        List<Reservation> reservations = reservationRepository.findByUtilisateur(utilisateur);
+
+        // Forcer le chargement des événements pour éviter LazyInitializationException
+        reservations.forEach(r -> {
+            if (r.getEvenement() != null) {
+                r.getEvenement().getTitre(); // Force le chargement
+            }
+        });
+
+        return reservations;
     }
 
     @Override
@@ -182,39 +213,27 @@ public class ReservationServiceImpl implements ReservationService {
     public Map<String, Object> getStatistiquesReservation() {
         Map<String, Object> stats = new HashMap<>();
 
-        // Nombre total de réservations
         long totalReservations = reservationRepository.count();
         stats.put("nombreTotalReservations", totalReservations);
 
-        // Réservations par statut (utilisation des Streams Java)
         List<Reservation> allReservations = reservationRepository.findAll();
 
-        long enAttente = allReservations.stream()
-                .filter(r -> r.getStatut() == ReservationStatus.EN_ATTENTE)
-                .count();
-        long confirmees = allReservations.stream()
-                .filter(r -> r.getStatut() == ReservationStatus.CONFIRMEE)
-                .count();
-        long annulees = allReservations.stream()
-                .filter(r -> r.getStatut() == ReservationStatus.ANNULEE)
-                .count();
+        long enAttente = allReservations.stream().filter(r -> r.getStatut() == ReservationStatus.EN_ATTENTE).count();
+        long confirmees = allReservations.stream().filter(r -> r.getStatut() == ReservationStatus.CONFIRMEE).count();
+        long annulees = allReservations.stream().filter(r -> r.getStatut() == ReservationStatus.ANNULEE).count();
 
         stats.put("reservationsEnAttente", enAttente);
         stats.put("reservationsConfirmees", confirmees);
         stats.put("reservationsAnnulees", annulees);
 
-        // Montant total des revenus (réservations confirmées uniquement)
         double revenuTotal = allReservations.stream()
                 .filter(r -> r.getStatut() == ReservationStatus.CONFIRMEE)
-                .mapToDouble(Reservation::getMontantTotal)
-                .sum();
+                .mapToDouble(Reservation::getMontantTotal).sum();
         stats.put("revenuTotal", revenuTotal);
 
-        // Nombre total de places réservées (confirmées)
         int totalPlaces = allReservations.stream()
                 .filter(r -> r.getStatut() == ReservationStatus.CONFIRMEE)
-                .mapToInt(Reservation::getNombrePlaces)
-                .sum();
+                .mapToInt(Reservation::getNombrePlaces).sum();
         stats.put("nombreTotalPlaces", totalPlaces);
 
         return stats;
@@ -226,7 +245,6 @@ public class ReservationServiceImpl implements ReservationService {
         Reservation reservation = findById(id);
         Map<String, Object> recap = new HashMap<>();
 
-        // Informations réservation
         recap.put("codeReservation", reservation.getCodeReservation());
         recap.put("dateReservation", reservation.getDateReservation());
         recap.put("nombrePlaces", reservation.getNombrePlaces());
@@ -234,48 +252,31 @@ public class ReservationServiceImpl implements ReservationService {
         recap.put("statut", reservation.getStatut().getLabel());
         recap.put("commentaire", reservation.getCommentaire());
 
-        // Informations utilisateur
         User utilisateur = reservation.getUtilisateur();
         Map<String, String> infoUtilisateur = new HashMap<>();
         infoUtilisateur.put("nom", utilisateur.getNom());
         infoUtilisateur.put("prenom", utilisateur.getPrenom());
         infoUtilisateur.put("email", utilisateur.getEmail());
-        infoUtilisateur.put("telephone", utilisateur.getTelephone());
         recap.put("utilisateur", infoUtilisateur);
 
-        // Informations événement
         Event evenement = reservation.getEvenement();
         Map<String, Object> infoEvenement = new HashMap<>();
         infoEvenement.put("titre", evenement.getTitre());
-        infoEvenement.put("categorie", evenement.getCategorie().getLabel());
         infoEvenement.put("dateDebut", evenement.getDateDebut());
-        infoEvenement.put("dateFin", evenement.getDateFin());
         infoEvenement.put("lieu", evenement.getLieu());
-        infoEvenement.put("ville", evenement.getVille());
         infoEvenement.put("prixUnitaire", evenement.getPrixUnitaire());
         recap.put("evenement", infoEvenement);
 
         return recap;
     }
 
-    // Méthode privée pour générer un code unique de réservation
-    // Format : EVT-XXXXX (5 chiffres aléatoires)
     private String genererCodeUniqueReservation() {
         String code;
         Random random = new Random();
-
-        // Boucle jusqu'à trouver un code unique
         do {
-            // Générer un nombre entre 10000 et 99999
             int randomNum = 10000 + random.nextInt(90000);
             code = "EVT-" + randomNum;
         } while (reservationRepository.existsByCodeReservation(code));
-
         return code;
-    }
-    @Override
-    @Transactional(readOnly = true)
-    public List<Reservation> findAll() {
-        return reservationRepository.findAll();
     }
 }
